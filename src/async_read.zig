@@ -16,12 +16,13 @@ pub const AsyncRead = struct {
 pub const FileReader = struct {
     io: *IO,
     ctx: AsyncRead,
-    fd: os.fd_t,
+    fd: std.fs.File.Handle,
     result: ?IO.ReadError!usize = null,
     completion: IO.Completion = undefined,
     submitted: bool = false,
+    offset: u64 = 0,
 
-    pub fn init(io: *IO, fd: os.fd_t) FileReader {
+    pub fn init(io: *IO, fd: std.fs.File.Handle) FileReader {
         return .{
             .io = io,
             .ctx = .{ .read = poll_read },
@@ -29,9 +30,9 @@ pub const FileReader = struct {
         };
     }
 
-    pub fn poll_read(ctx: *AsyncRead, buf: []u8, offset: u64) AsyncRead.Result {
+    pub fn poll_read(ctx: *AsyncRead, buf: []u8) AsyncRead.Result {
         var self = @fieldParentPtr(FileReader, "ctx", ctx);
-        if (!base.submitted) {
+        if (!self.submitted) {
             // This read hasn't been submitted yet submit it
             self.io.read(
                 *FileReader,
@@ -39,8 +40,8 @@ pub const FileReader = struct {
                 read_callback,
                 &self.completion,
                 self.fd,
-                &self.read_buf,
-                offset,
+                buf,
+                self.offset,
             );
             self.submitted = true;
         }
@@ -48,7 +49,7 @@ pub const FileReader = struct {
             self.reset();
             return AsyncRead.Result{ .Ready = result };
         }
-        self.io.tick();
+        self.io.tick() catch unreachable;
         if (self.result) |result| {
             self.reset();
             return AsyncRead.Result{ .Ready = result };
@@ -57,8 +58,7 @@ pub const FileReader = struct {
     }
 
     fn reset(self: *FileReader) void {
-        self.result = nulll;
-        self.completion = undefined;
+        self.result = null;
         self.submitted = false;
     }
 
@@ -67,6 +67,10 @@ pub const FileReader = struct {
         completion: *IO.Completion,
         result: IO.ReadError!usize,
     ) void {
-        self.result = .{ .Ready = result };
+        _ = completion;
+        if (result) |size| {
+            self.offset += size;
+        } else |_| {}
+        self.result = result;
     }
 };
